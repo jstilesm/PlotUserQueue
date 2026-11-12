@@ -257,3 +257,119 @@ test('flags other than pause and hold are rejected with 400', async (t) => {
     await assert.rejects(async () => store.clearFlag('nope'), { status: 400 });
     await store.setFlag('pause');           // the other allowed name
 });
+
+// ---- readQueue ----
+
+test('readQueue on a fresh store is the empty shape', async (t) => {
+    const { store } = await freshStore(t);
+    assert.deepEqual(await store.readQueue(), { hold: false, active: null, pending: [], recent: [] });
+});
+
+test('readQueue reports the active job, the pending list and both flags', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const [A, B, C] = await threeJobs(store);
+    const db = openDb(t, dir);
+    db.run("UPDATE jobs SET state = 'active', started = ? WHERE id = ?", '2026-11-11T10:00:00.000Z', A);
+    await store.setFlag('hold');
+    await store.setFlag('pause');
+
+    assert.deepEqual(await store.readQueue(), {
+        hold: true,
+        active: { id: A, user: 'Dan', name: 'test.hpgl', preview: null, progress: null, paused: true },
+        pending: [
+            { id: B, user: 'Dan', name: 'test.hpgl', preview: null },
+            { id: C, user: 'Dan', name: 'test.hpgl', preview: null },
+        ],
+        recent: [],
+    });
+});
+
+test('readQueue: paused follows the pause flag; a set pause flag does not invent an active job', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const [A] = await threeJobs(store);
+    const db = openDb(t, dir);
+
+    await store.setFlag('pause');
+    assert.equal((await store.readQueue()).active, null);        // nothing active yet
+
+    db.run("UPDATE jobs SET state = 'active' WHERE id = ?", A);
+    assert.equal((await store.readQueue()).active.paused, true);
+
+    await store.clearFlag('pause');
+    assert.equal((await store.readQueue()).active.paused, false);
+    assert.equal((await store.readQueue()).hold, false);
+});
+
+test('readQueue: recent is the 10 newest finished jobs, newest first, in the contract shape', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const print = await addPrint(store);
+    const db = openDb(t, dir);
+    const states = ['done', 'failed', 'cancelled'];
+
+    // 12 finished jobs with known finish times; job i finished at 10:i.
+    const ids = [];
+    for (let i = 0; i < 12; i++) {
+        const { id } = await store.enqueue('Dan', print.id);
+        ids.push(id);
+        db.run('UPDATE jobs SET state = ?, finished = ? WHERE id = ?',
+            states[i % 3], `2026-11-11T10:${String(i).padStart(2, '0')}:00.000Z`, id);
+    }
+
+    const q = await store.readQueue();
+    assert.deepEqual(q.pending, []);
+    assert.equal(q.recent.length, 10);
+    assert.deepEqual(q.recent.map((j) => j.id), ids.slice(2).reverse());   // 11, 10, ..., 2
+    assert.deepEqual(q.recent[0], {
+        id: ids[11], user: 'Dan', name: 'test.hpgl', state: states[11 % 3],
+        finished: '2026-11-11T10:11:00.000Z',
+    });
+});
+
+// ---- pruneFinished ----
+
+// Enqueues n jobs for one print and marks each finished at 10:i (i = 0..n-1),
+// cycling through done/failed/cancelled. Returns the ids in finish order.
+async function finishedJobs(t, dir, store, n) {
+    const print = await addPrint(store);
+    const db = openDb(t, dir);
+    const states = ['done', 'failed', 'cancelled'];
+    const ids = [];
+    for (let i = 0; i < n; i++) {
+        const { id } = await store.enqueue('Dan', print.id);
+        ids.push(id);
+        db.run('UPDATE jobs SET state = ?, finished = ? WHERE id = ?',
+            states[i % 3], `2026-11-11T10:${String(i).padStart(2, '0')}:00.000Z`, id);
+    }
+    return ids;
+}
+
+test('pruneFinished keeps the 50 newest finished jobs and returns how many it removed', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const ids = await finishedJobs(t, dir, store, 55);
+
+    assert.equal(await store.pruneFinished(), 5);
+
+    const left = openDb(t, dir).all('SELECT id FROM jobs ORDER BY finished').map((r) => r.id);
+    assert.deepEqual(left, ids.slice(5));          // the 5 oldest are gone
+});
+
+test('pruneFinished with a custom keep, and nothing to do the second time', async (t) => {
+    const { dir, store } = await freshStore(t);
+    await finishedJobs(t, dir, store, 12);
+
+    assert.equal(await store.pruneFinished(10), 2);
+    assert.equal(await store.pruneFinished(10), 0);   // already at 10: nothing removed
+    assert.equal(openDb(t, dir).get('SELECT COUNT(*) AS n FROM jobs').n, 10);
+});
+
+test('pruneFinished never touches pending or active jobs', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const [A, B, C] = await threeJobs(store);                 // three pending
+    openDb(t, dir).run("UPDATE jobs SET state = 'active' WHERE id = ?", A);
+    await finishedJobs(t, dir, store, 12);
+
+    assert.equal(await store.pruneFinished(10), 2);
+    assert.deepEqual(await order(store), [B, C]);              // pending untouched
+    assert.ok(openDb(t, dir).get('SELECT * FROM jobs WHERE id = ?', A), 'active job still exists');
+    assert.equal(openDb(t, dir).get('SELECT COUNT(*) AS n FROM jobs').n, 13);   // 10 finished + A, B, C
+});

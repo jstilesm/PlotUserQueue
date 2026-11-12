@@ -1,4 +1,4 @@
-import { readFile, writeFile, stat, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -35,8 +35,6 @@ function utcStamp() {
 function error(message, code) {
     throw Object.assign(new Error(message), {status: code});
 }
-
-
 export async function createStore(dataDir) {
 
 
@@ -74,30 +72,11 @@ export async function createStore(dataDir) {
             value TEXT NOT NULL
         )`)
 
-    // build paths for prints
+    // build paths 
     function p(...parts) {
         return path.join(dataDir, ...parts)
     }
-    async function readJson(file) {
-        const json = await readFile(file, 'utf8')
-        return JSON.parse(json)
-    }
 
-    async function writeJson(file, value) {
-        const data = JSON.stringify(value, null, 2)
-        await writeFile(file, data)
-    }
-    async function exists(file) {
-        try {
-            await stat(file);
-            return true
-            } catch (err) {
-                if (err.code === "ENOENT") {
-                    return false
-                }
-            throw err;
-        }
-    }
     function checkName(name) {
         if (typeof name !== 'string' || !(/^[A-Za-z0-9_-]+$/).test(name)) {
             error('invalid name', 400)
@@ -111,7 +90,7 @@ export async function createStore(dataDir) {
     function cancelPending(id) {
         const cancel = db.prepare('DELETE FROM jobs WHERE id = ? AND state = ?').run(id, 'pending')
         if (cancel.changes === 0) {
-            error('print not found', 404);
+            error('job not found', 404);
         }
     }
     function listPending() {
@@ -136,7 +115,7 @@ export async function createStore(dataDir) {
         }
         let job = pending[index]
         let neighbor
-        db.exec('BEGIN')
+        db.exec('BEGIN IMMEDIATE')
         try {
             if (to === 'up') {
                 neighbor = pending[index - 1]
@@ -152,7 +131,7 @@ export async function createStore(dataDir) {
                     
                     // reset to continue the chain
                     pending = listPending()
-                    index = pending.findIndex(job => job.id == id)
+                    index = pending.findIndex(job => job.id === id)
                     job = pending[index]
                     
                 }
@@ -180,9 +159,9 @@ export async function createStore(dataDir) {
 
     // provides sequencing for the queue
     function nextSeq() {
-        return db.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next from jobs').get()
+        return db.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next from jobs').get().next
     }
-    async function enqueue(user, printId) {
+    function enqueue(user, printId) {
         checkName(user)
         checkName(printId)
 
@@ -191,15 +170,59 @@ export async function createStore(dataDir) {
             error('print not found', 404)
         }
         const id = makeJobId();
-        const seq = nextSeq();
-        const created = new Date().toISOString()
-        const job = { id, name: selection.name, user, state:'pending',seq: seq.next, submitted: created, started: null, finished: null, exitCode: null, reason: null, printID: printId}
-
-        const insert = db.prepare('INSERT INTO jobs (id, name, user, state, seq, submitted, started, finished, exitCode, reason, printID) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        insert.run(job.id, job.name, job.user, job.state, job.seq, job.submitted, null, null, null, null, job.printID)
+        let job;
+        db.exec('BEGIN IMMEDIATE')
+        try {
+            const seq = nextSeq();
+            const created = new Date().toISOString()
+            job = { id, name: selection.name, user, state:'pending',seq: seq, submitted: created, started: null, finished: null, exitCode: null, reason: null, printID: printId}
+            const insert = db.prepare('INSERT INTO jobs (id, name, user, state, seq, submitted, started, finished, exitCode, reason, printID) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+            insert.run(job.id, job.name, job.user, job.state, job.seq, job.submitted, null, null, null, null, job.printID)
+            db.exec('COMMIT')
+        } catch (err) {
+            db.exec('ROLLBACK')
+            throw err
+        }
 
         return job
     } 
+    function readQueue() {
+        const settings = db.prepare('SELECT name FROM settings WHERE name = ?'); 
+
+        const row = db.prepare('SELECT * FROM jobs WHERE state = ?').get('active');
+
+        const active = row ? {id: row.id, name: row.name, user: row.user, preview: null, progress: null, paused: settings.get('pause') !== undefined} : null;
+
+        const pending = listPending().map(job => ({
+            id: job.id,
+            name: job.name,
+            user: job.user,
+            preview: null,
+        }));
+
+        const hold = settings.get('hold') !== undefined;
+
+        const recent = db.prepare('SELECT * FROM jobs WHERE state IN (?,?,?) ORDER BY finished DESC LIMIT 10').all('done','failed','cancelled').map(job => ({
+            id: job.id,
+            name: job.name,
+            user: job.user,
+            state: job.state,
+            finished: job.finished,
+        }));
+
+        return {
+           hold, active, pending, recent
+        }
+    }
+
+    function pruneFinished(keep = 50) {
+        return db.prepare(`DELETE FROM jobs WHERE state IN ('done', 'failed', 'cancelled') AND id NOT IN (
+      SELECT id FROM jobs
+      WHERE state IN ('done', 'failed', 'cancelled')
+      ORDER BY finished DESC
+      LIMIT ?
+    )`).run(keep).changes
+    }
 
     async function createPrint({name, user, sourceType, source, hpgl}) {
         checkName(user)
@@ -242,7 +265,7 @@ export async function createStore(dataDir) {
         last = run.catch(() => {})
         return run
     }
-    return { withLock, createPrint, enqueue, moveJob, listPending, cancelPending, setFlag, clearFlag }
+    return { withLock, createPrint, pruneFinished, enqueue, readQueue, moveJob, listPending, cancelPending, setFlag, clearFlag }
 }
 
 
