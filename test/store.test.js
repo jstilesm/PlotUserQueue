@@ -373,3 +373,92 @@ test('pruneFinished never touches pending or active jobs', async (t) => {
     assert.ok(openDb(t, dir).get('SELECT * FROM jobs WHERE id = ?', A), 'active job still exists');
     assert.equal(openDb(t, dir).get('SELECT COUNT(*) AS n FROM jobs').n, 13);   // 10 finished + A, B, C
 });
+
+// ---- takeNext / finishJob / recoverInterrupted / plotPath (step 3) ----
+
+test('takeNext returns null when there is nothing to start', async (t) => {
+    const { store } = await freshStore(t);
+    assert.equal(await store.takeNext(), null);                 // empty queue
+
+    const [A] = await threeJobs(store);
+    await store.setFlag('hold');
+    assert.equal(await store.takeNext(), null);                 // hold is set
+    await store.clearFlag('hold');
+
+    const taken = await store.takeNext();                       // now A starts
+    assert.equal(taken.id, A);
+    assert.equal(await store.takeNext(), null);                 // one active at a time
+});
+
+test('takeNext claims the lowest-seq pending job and marks it active', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const [A, B, C] = await threeJobs(store);
+    await store.moveJob(C, 'top');                              // order is now C, A, B
+
+    const job = await store.takeNext();
+    assert.equal(job.id, C);
+    assert.equal(job.state, 'active');
+    assert.match(job.started, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(job.finished, null);
+
+    const row = openDb(t, dir).get('SELECT * FROM jobs WHERE id = ?', C);
+    assert.deepEqual(row, job);                                 // returned what was stored
+    assert.deepEqual(await order(store), [A, B]);               // C is no longer pending
+});
+
+test('finishJob marks an active job done or failed', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const db = openDb(t, dir);
+    const [A, B] = await threeJobs(store);
+
+    await store.takeNext();                                     // A
+    await store.finishJob(A, { exitCode: 0 });
+    const a = db.get('SELECT * FROM jobs WHERE id = ?', A);
+    assert.equal(a.state, 'done');
+    assert.equal(a.exitCode, 0);
+    assert.equal(a.reason, null);
+    assert.match(a.finished, /^\d{4}-\d{2}-\d{2}T/);
+
+    await store.takeNext();                                     // B
+    await store.finishJob(B, { exitCode: 1, reason: 'exit 1' });
+    const b = db.get('SELECT * FROM jobs WHERE id = ?', B);
+    assert.equal(b.state, 'failed');
+    assert.equal(b.exitCode, 1);
+    assert.equal(b.reason, 'exit 1');
+});
+
+test('finishJob rejects a job that is not active with 404', async (t) => {
+    const { store } = await freshStore(t);
+    const [A, , C] = await threeJobs(store);
+    await assert.rejects(async () => store.finishJob(C, { exitCode: 0 }), { status: 404 });   // still pending
+    await store.takeNext();
+    await store.finishJob(A, { exitCode: 0 });
+    await assert.rejects(async () => store.finishJob(A, { exitCode: 0 }), { status: 404 });   // already done
+    await assert.rejects(async () => store.finishJob('20261110-120000-dead', { exitCode: 0 }), { status: 404 });
+});
+
+test('recoverInterrupted fails any active job with reason interrupted', async (t) => {
+    const { dir, store } = await freshStore(t);
+    assert.equal(await store.recoverInterrupted(), 0);          // clean store
+
+    const [A, B] = await threeJobs(store);
+    await store.takeNext();                                     // A is active, as if mid-plot
+    assert.equal(await store.recoverInterrupted(), 1);
+
+    const a = openDb(t, dir).get('SELECT * FROM jobs WHERE id = ?', A);
+    assert.equal(a.state, 'failed');
+    assert.equal(a.reason, 'interrupted');
+    assert.match(a.finished, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(await order(store), [B, (await order(store))[1]]);   // B still first in line
+    assert.equal(await store.recoverInterrupted(), 0);          // nothing left to recover
+});
+
+test('plotPath points at the job\'s plot.hpgl, which exists', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const print = await addPrint(store);
+    const job = await store.enqueue('Dan', print.id);
+
+    const file = store.plotPath(job);
+    assert.equal(file, path.join(dir, 'users', 'Dan', 'prints', print.id, 'plot.hpgl'));
+    assert.equal(await readFile(file, 'utf8'), SQUARE);
+});

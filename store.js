@@ -217,11 +217,46 @@ export async function createStore(dataDir) {
 
     function pruneFinished(keep = 50) {
         return db.prepare(`DELETE FROM jobs WHERE state IN ('done', 'failed', 'cancelled') AND id NOT IN (
-      SELECT id FROM jobs
-      WHERE state IN ('done', 'failed', 'cancelled')
-      ORDER BY finished DESC
-      LIMIT ?
-    )`).run(keep).changes
+            SELECT id FROM jobs
+            WHERE state IN ('done', 'failed', 'cancelled')
+            ORDER BY finished DESC
+            LIMIT ?)`).run(keep).changes
+    }
+    function takeNext() {
+        let result = null
+        db.exec('BEGIN IMMEDIATE')
+        try {
+            const settings = db.prepare('SELECT name FROM settings WHERE name = ?').get('hold')
+            const active = db.prepare('SELECT * FROM jobs WHERE state = ?').get('active');
+            if (settings === undefined && active === undefined) {
+                const job = db.prepare(`SELECT * FROM jobs WHERE state = 'pending' ORDER BY seq LIMIT 1`).get()
+                if (job) {
+                    const now = new Date().toISOString()
+                    result = {...db.prepare(`UPDATE jobs SET state = 'active', started = ? WHERE id = ? RETURNING *`).get(now, job.id)}
+                } 
+            }
+            db.exec('COMMIT')
+        } catch(err) {
+            db.exec('ROLLBACK')
+            throw err
+        }
+        return result
+    }
+    function finishJob(id, { exitCode, reason}) {
+        const state = exitCode === 0 ? 'done' : 'failed'
+        const now = new Date().toISOString()
+        const finish = db.prepare(`UPDATE jobs SET state = ?, finished = ?, reason = ?, exitCode = ? WHERE id = ? AND state = 'active'`).run(state, now, reason ?? null, exitCode, id)
+        if (finish.changes === 0) {
+            error('job not found', 404);
+        }
+    }
+    function recoverInterrupted() {
+        const now = new Date().toISOString();
+        return db.prepare(`UPDATE jobs SET state = ?, finished = ?, reason = ? WHERE state = 'active'`).run('failed', now, 'interrupted').changes
+    }
+
+    function plotPath(job) {
+        return p('users', job.user, 'prints', job.printID, 'plot.hpgl')
     }
 
     async function createPrint({name, user, sourceType, source, hpgl}) {
@@ -249,6 +284,7 @@ export async function createStore(dataDir) {
                 } else throw err;
             }
         }
+
         const created = new Date().toISOString()
         await writeFile(path.join(directory, 'source.hpgl'), source)
         await writeFile(path.join(directory, 'plot.hpgl'), hpgl)
@@ -258,6 +294,7 @@ export async function createStore(dataDir) {
         return { id , name, user, created, sourceType }
     }
 
+    
     let last = Promise.resolve();
 
     function withLock(fn) {
@@ -265,7 +302,7 @@ export async function createStore(dataDir) {
         last = run.catch(() => {})
         return run
     }
-    return { withLock, createPrint, pruneFinished, enqueue, readQueue, moveJob, listPending, cancelPending, setFlag, clearFlag }
+    return { withLock, createPrint, takeNext, finishJob, recoverInterrupted, plotPath, pruneFinished, enqueue, readQueue, moveJob, listPending, cancelPending, setFlag, clearFlag }
 }
 
 
