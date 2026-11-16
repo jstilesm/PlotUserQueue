@@ -1,5 +1,3 @@
-// Builds the HTTP server: routes, static files, CORS. server.js starts it;
-// tests start their own copy on a random port.
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,31 +13,76 @@ const TYPES = {
   '.png': 'image/png',
 };
 
-export function createApp() {
+export function createApp({ store, worker }) {
+  async function handle(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.on('finish', () => console.log(req.method, req.url, res.statusCode))
+
+    // no body catch3.)
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.writeHead(204);
+      return res.end();
+  }
+
+    const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+
+    const parts = pathname.split('/');
+
+    if (req.method === 'GET' && pathname === '/health') {
+      return sendJson(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && pathname === '/queue.json') {
+      return sendJson(res, 200, store.readQueue())
+    }
+    if (req.method === 'GET') {
+      return serveStatic(res, pathname);
+    }
+
+    if (req.method === "POST" && pathname === '/queue/hold' ) {
+      await store.withLock(() => store.setFlag('hold'));
+      return sendJson(res, 200, {ok: true})
+    }
+    if (req.method === "POST" && pathname === '/queue/release') {
+      await store.withLock(() => store.clearFlag('hold'))
+      worker.wake()
+      return sendJson(res, 200, {ok: true})
+    }
+
+    if (req.method === 'POST' && parts.length === 4 && parts[1] === 'jobs') {
+      const [, , id, action] = parts;
+      if (action === 'move') {
+        await store.withLock(() => store.moveJob(id, searchParams.get('to')))
+        return sendJson(res, 200, {ok: true})
+      } else if (action === 'cancel') {
+        await store.withLock(() => store.cancelPending(id))
+        return sendJson(res, 200, {ok: true})
+      }
+    }
+    if (req.method === "POST" && pathname === '/jobs') {
+      const body = await readJson(req)
+      const print = await store.createPrint({ name: body.name, user:body.user, sourceType: 'hpgl',source: body.hpgl, hpgl: body.hpgl })
+      const job = await store.withLock(() => store.enqueue(body.user, print.id))
+      worker.wake()
+      return sendJson(res, 201, {id: job.id, printId: print.id})
+    }
+    
+    sendJson(res, 404, { error: 'not found' });
+  }
   return http.createServer((req, res) => {
-    // handle() is async; catch here so a thrown error becomes a 500 instead of crashing the process.
     handle(req, res).catch(err => {
-      console.error(err);
-      if (!res.headersSent) sendJson(res, 500, { error: 'internal error' });
-      else res.end();
-    });
-  });
+      if (Number(err.status)) {
+        return sendJson(res, err.status, {error: err.message})
+      } else {
+        console.error(err)
+        return sendJson(res, 500, {error: 'internal error'})
+      }
+    })
+
+  })
 }
 
-async function handle(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.on('finish', () => console.log(req.method, req.url, res.statusCode));
-
-  const { pathname } = new URL(req.url, 'http://localhost');
-
-  if (req.method === 'GET' && pathname === '/health') {
-    return sendJson(res, 200, { ok: true });
-  }
-  if (req.method === 'GET') {
-    return serveStatic(res, pathname);
-  }
-  sendJson(res, 404, { error: 'not found' });
-}
 
 async function serveStatic(res, pathname) {
   let rel;
@@ -50,9 +93,6 @@ async function serveStatic(res, pathname) {
   }
   if (rel.endsWith('/')) rel += 'index.html';
 
-  // The URL parser already removes plain "../", but an encoded slash ("..%2f")
-  // survives it and only becomes "../" after decoding. Resolve the real path
-  // and refuse anything that lands outside public/.
   const file = path.join(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR)) {
     return sendJson(res, 403, { error: 'forbidden' });
@@ -70,6 +110,21 @@ async function serveStatic(res, pathname) {
   const type = TYPES[path.extname(file)] ?? 'application/octet-stream';
   res.writeHead(200, { 'Content-Type': type });
   res.end(body);
+}
+
+async function readJson(req, limit = 5 * 1024 * 1024) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw Object.assign(new Error('too large'), { status: 413 });
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw Object.assign(new Error('invalid json'), { status: 400 });
+  }
 }
 
 function sendJson(res, status, body) {

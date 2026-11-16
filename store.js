@@ -109,7 +109,7 @@ export async function createStore(dataDir) {
         let index = pending.findIndex(job => job.id === id);
 
         if (index < 0) {
-            error('job isnt pending', 404)
+            error('job not found', 404)
         }
         let job = pending[index]
         let neighbor

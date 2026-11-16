@@ -254,3 +254,37 @@ Note: `moveJob(id, null)` already throws 400 `invalid position`, so a missing
   OPTIONS 204 with method/header lists, unknown POST 404, POST to a static
   path 404). Trimmed `plot-file.sh` to its three lines. Next: R0 with the
   handoff's opening question.
+
+---
+
+## Lesson R5 (added at Jess's request): the upload route, `POST /jobs`
+
+Pulled forward from "after Step 4" because it replaces `send-test.js`.
+
+- **Contract:** `POST /jobs`, JSON body `{ user, name, hpgl }`. Calls
+  `createPrint({ user, name, sourceType: 'hpgl', source: hpgl, hpgl })`, then
+  `enqueue(user, print.id)`, then `worker.wake()`. Replies `201 { id, printId }`.
+  Errors: store 400s pass through; a body that isn't JSON → 400 `invalid json`;
+  over 5 MB → 413 `too large`.
+- **Explain:** `req` is a readable stream; the body arrives in chunks after the
+  headers. `for await (const chunk of req)` collects them; count bytes as they
+  come and stop at a limit (a client can lie in `Content-Length` or omit it).
+  `JSON.parse` throws a `SyntaxError` with no `status`; the route turns it into
+  a 400 so it doesn't become a 500.
+- **Ask:** "`createPrint` writes files (slow, awaits) and `enqueue` is one
+  transaction. Which of the two needs `withLock`, and what happens to the
+  worker's tick if the lock is held across the file writes?" (createPrint
+  claims its id with an atomic `mkdir` and needs no lock; `enqueue` goes under
+  the lock like every other queue change. Holding the lock across the writes
+  would only delay ticks by milliseconds, so either is defensible; recommend
+  lock on `enqueue` only.)
+- **Tutor writes tests first** (6 cases appended to `test/app.test.js`): 201
+  with `id`/`printId`, job pending with name and user, `plot.hpgl` on disk
+  equals the upload, wake once; same name twice → distinct prints, in order;
+  missing hpgl → 400 from the store, nothing queued or woken; bad user → 400
+  `invalid name`; non-JSON body → 400 `invalid json`; 5 MB + 1 → 413.
+- **Plumbing offered:** a `readJson(req, limit)` helper (stream collection and
+  the two error mappings) if Jess wants it ready-made; the route itself is hers.
+- **Watch for:** `wake()` before `enqueue` has committed; calling `wake()` on
+  the error path; parsing JSON inside the lock; forgetting that `source` and
+  `hpgl` are the same string for HPGL uploads.

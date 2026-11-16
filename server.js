@@ -9,7 +9,7 @@ const store = await createStore(DATA_DIR);
 const worker = createWorker(store, { plotCmd: PLOT_CMD, plotArgs: PLOT_ARGS, logDir: path.join(DATA_DIR, 'logs') })
 await worker.start();
 
-const server = createApp().listen(PORT, () => {
+const server = createApp({store, worker}).listen(PORT, () => {
   console.log(`plotq listening on http://localhost:${PORT} (data in ${DATA_DIR})`);
 });
 
