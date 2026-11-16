@@ -36,8 +36,6 @@ function error(message, code) {
     throw Object.assign(new Error(message), {status: code});
 }
 export async function createStore(dataDir) {
-
-
      for (const folder of FOLDERS) {
         await mkdir(p(folder), {recursive: true})
     }
