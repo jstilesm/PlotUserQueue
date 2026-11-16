@@ -288,3 +288,19 @@ Pulled forward from "after Step 4" because it replaces `send-test.js`.
 - **Watch for:** `wake()` before `enqueue` has committed; calling `wake()` on
   the error path; parsing JSON inside the lock; forgetting that `source` and
   `hpgl` are the same string for HPGL uploads.
+- 2026-11-16, Lessons R1–R5: done, 68/68, and a real plot ran on plotpi
+  through the new routes (hold → `POST /jobs` with the file wrapped in JSON by
+  a `node -e` one-liner → release → done). Jess rewrote `createApp` with
+  `handle` as a closure over `{ store, worker }`, chose `split('/')` over the
+  regex for `/jobs/<id>/<action>`, put every queue change under `withLock`
+  with `wake()` after the lock, and the catch maps `err.status` → status +
+  message, else 500. Bugs found by tests: catch rethrew instead of responding
+  (client hung on the first 400); `err.stats` typo in the 500 branch;
+  `source: 'hpgl'` literal in the upload route (caught only after the tutor
+  added a `source.hpgl` assertion). Decisions: unknown `/jobs/<id>/<x>` falls
+  through to the 404 ("the path decides existence, the store decides
+  validity"); `createPrint` outside the lock, `enqueue` inside; upload body is
+  JSON `{ user, name, hpgl }` with a 5 MB limit. `send-test.js` removed.
+  Committed as "Added Routes". Still open from Step 3: config.js's default
+  `PLOT_CMD` points at `plot_task.sh`, which is wrong for plotpi.
+  Next: Step 5 kiosk page.
