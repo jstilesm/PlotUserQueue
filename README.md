@@ -4,7 +4,7 @@ A print queue for the pen plotter on plotpi. One Node.js process serves the
 kiosk page (for dancer's touchscreen), the upload page, the JSON API, and runs
 the worker that plots jobs one at a time.
 
-No dependencies: built-in Node modules only. Needs Node 20 or newer.
+No dependencies: built-in Node modules only (including `node:sqlite`). Needs Node 22.13 or newer.
 
 ## Run it
 
