@@ -427,6 +427,21 @@ test('finishJob marks an active job done or failed', async (t) => {
     assert.equal(b.reason, 'exit 1');
 });
 
+test('finishJob takes an explicit state, for cancelled jobs (step 6)', async (t) => {
+    const { dir, store } = await freshStore(t);
+    const db = openDb(t, dir);
+    const [A] = await threeJobs(store);
+
+    await store.takeNext();                                     // A
+    await store.finishJob(A, { exitCode: null, reason: 'cancelled', state: 'cancelled' });
+    const a = db.get('SELECT * FROM jobs WHERE id = ?', A);
+    assert.equal(a.state, 'cancelled');
+    assert.equal(a.exitCode, null);
+    assert.equal(a.reason, 'cancelled');
+    assert.match(a.finished, /^\d{4}-/);
+    assert.deepEqual((await store.readQueue()).recent.map((j) => [j.id, j.state]), [[A, 'cancelled']]);
+});
+
 test('finishJob rejects a job that is not active with 404', async (t) => {
     const { store } = await freshStore(t);
     const [A, , C] = await threeJobs(store);

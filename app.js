@@ -49,6 +49,14 @@ export function createApp({ store, worker }) {
       worker.wake()
       return sendJson(res, 200, {ok: true})
     }
+    if (req.method === "POST" && pathname === '/queue/pause') {
+      await worker.pause()
+      return sendJson(res, 200, {ok: true})
+    }
+    if (req.method === "POST" && pathname === '/queue/resume') {
+      await worker.resume()
+      return sendJson(res, 200, {ok: true})
+    }
 
     if (req.method === 'POST' && parts.length === 4 && parts[1] === 'jobs') {
       const [, , id, action] = parts;
@@ -56,7 +64,11 @@ export function createApp({ store, worker }) {
         await store.withLock(() => store.moveJob(id, searchParams.get('to')))
         return sendJson(res, 200, {ok: true})
       } else if (action === 'cancel') {
-        await store.withLock(() => store.cancelPending(id))
+        if (worker.current()?.id === id) {
+          await worker.cancel(id)
+        } else {
+          await store.withLock(() => store.cancelPending(id))
+        }
         return sendJson(res, 200, {ok: true})
       }
     }

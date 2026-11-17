@@ -12,7 +12,17 @@ const SQUARE = 'IN;SP1;PU0,0;PD1000,0,1000,1000,0,1000,0,0;PU;SP0;';
 // stub: routes only need wake(), and the tests count how often it's called.
 let dir, store, server, base;
 let woke = 0;
-const worker = { wake() { woke++; } };
+let running = null;                         // what the stub's current() reports
+const calls = [];                           // cancel/pause/resume calls the routes made
+const notFound = () => Object.assign(new Error('job not found'), { status: 404 });
+const nothing = () => Object.assign(new Error('nothing plotting'), { status: 409 });
+const worker = {
+  wake() { woke++; },
+  current() { return running; },
+  async cancel(id) { calls.push(['cancel', id]); if (running?.id !== id) throw notFound(); },
+  async pause() { calls.push(['pause']); if (!running) throw nothing(); },
+  async resume() { calls.push(['resume']); if (!running) throw nothing(); },
+};
 
 before(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'plotq-app-'));
@@ -43,6 +53,8 @@ async function reset() {
   for (const id of pendingIds()) store.cancelPending(id);
   store.clearFlag('hold');
   woke = 0;
+  running = null;
+  calls.length = 0;
 }
 
 // ---- Step 1 (unchanged behaviour) ----
@@ -272,4 +284,42 @@ test('a body over the size limit is a 413', async () => {
   assert.equal(r.status, 413);
   assert.deepEqual(await r.json(), { error: 'too large' });
   assert.deepEqual(pendingIds(), []);
+});
+
+// ---- Step 6: control of the running job ----
+// The worker owns the running process; routes only decide who to ask.
+
+test('POST /jobs/<id>/cancel for the running job goes to the worker, not the store', async () => {
+  await reset();
+  const [a] = await queue(1);
+  running = { id: 'running-1', pid: 1, startedAt: '', paused: false };
+  const r = await post('/jobs/running-1/cancel');
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls, [['cancel', 'running-1']]);
+  assert.deepEqual(pendingIds(), [a], 'the pending job is untouched');
+});
+
+test('cancel of a pending job still goes to the store, even while another job is running', async () => {
+  await reset();
+  const [a] = await queue(1);
+  running = { id: 'running-1', pid: 1, startedAt: '', paused: false };
+  const r = await post(`/jobs/${a}/cancel`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(pendingIds(), []);
+});
+
+test('POST /queue/pause and /queue/resume ask the worker', async () => {
+  await reset();
+  running = { id: 'running-1', pid: 1, startedAt: '', paused: false };
+  assert.equal((await post('/queue/pause')).status, 200);
+  assert.equal((await post('/queue/resume')).status, 200);
+  assert.deepEqual(calls, [['pause'], ['resume']]);
+});
+
+test('pause with nothing plotting is the worker\'s 409, as JSON', async () => {
+  await reset();
+  const r = await post('/queue/pause');
+  assert.equal(r.status, 409);
+  assert.deepEqual(await r.json(), { error: 'nothing plotting' });
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -23,20 +23,23 @@ async function until(fn, ms = 5000) {
 
 // A fresh store + worker. The fake plot takes 0.2 s and exits with `exit`.
 // The worker is created but NOT started; each test starts it when ready.
-async function setup(t, { exit = 0, plotCmd = FAKE, tickMs = 50 } = {}) {
+async function setup(t, { exit = 0, plotCmd = FAKE, tickMs = 50, seconds = '0.2', cancelCmd, stallMs, stallAfter } = {}) {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'plotq-w-'));
     t.after(() => rm(dir, { recursive: true, force: true }));
-    process.env.FAKE_PLOT_SECONDS = '0.2';
+    process.env.FAKE_PLOT_SECONDS = seconds;
     process.env.FAKE_PLOT_EXIT = String(exit);
+    if (stallAfter === undefined) delete process.env.FAKE_PLOT_STALL_AFTER;
+    else process.env.FAKE_PLOT_STALL_AFTER = String(stallAfter);
 
     const store = await createStore(dir);
-    const worker = createWorker(store, { plotCmd, plotArgs: ['{file}'], logDir: path.join(dir, 'logs'), tickMs });
+    const worker = createWorker(store, { plotCmd, plotArgs: ['{file}'], logDir: path.join(dir, 'logs'), tickMs, cancelCmd, stallMs });
     t.after(() => worker.stop());
 
     const db = new DatabaseSync(path.join(dir, 'plotq.db'));
     t.after(() => db.close());
     const jobs = () => db.prepare('SELECT * FROM jobs ORDER BY seq').all().map((r) => ({ ...r }));
-    return { dir, store, worker, jobs };
+    const flag = (name) => db.prepare('SELECT 1 FROM settings WHERE name = ?').get(name) !== undefined;
+    return { dir, store, worker, jobs, flag };
 }
 
 async function queue(store, n) {
@@ -152,4 +155,156 @@ test('a job left active from a previous run is failed as interrupted on start, a
 
     await store.clearFlag('hold');                            // Release → B runs normally
     await until(() => jobs().find((j) => j.id === B).state === 'done');
+});
+
+// ---- cancel, pause/resume, stall timeout (step 6) ----
+// The fake plot now writes a tick every 0.1 s, so "the plot is stopped" is
+// observable as a log file that stops growing.
+
+const RESET = path.join(import.meta.dirname, 'fake-reset.sh');
+const logSize = (dir, id) => stat(path.join(dir, 'logs', `${id}.log`)).then((s) => s.size);
+const stateOf = (jobs, id) => jobs().find((j) => j.id === id).state;
+
+test('cancel(id) kills the running plot: cancelled, hold set, cancel command output logged, worker goes on', async (t) => {
+    const { dir, store, worker, jobs } = await setup(t, { seconds: '5', cancelCmd: RESET });
+    const [A, B] = await queue(store, 2);
+    worker.start();
+    await until(() => worker.current()?.id === A);
+
+    await worker.cancel(A);
+    await until(() => stateOf(jobs, A) === 'cancelled', 3000);
+    assert.equal(jobs().find((j) => j.id === A).reason, 'cancelled');
+    assert.equal(worker.current(), null);
+    assert.equal((await store.readQueue()).hold, true, 'hold after a cancel, like any other end');
+    const log = await readFile(path.join(dir, 'logs', `${A}.log`), 'utf8');
+    assert.match(log, /reset plotter/, 'cancelCmd ran and logged into the job log');
+
+    await store.clearFlag('hold');                             // Release → B starts
+    await until(() => worker.current()?.id === B);
+    await worker.cancel(B);                                    // don't leave a 5 s plot behind
+    await until(() => worker.current() === null, 3000);
+});
+
+test('cancel of a job that is not the running one is a 404', async (t) => {
+    const { store, worker } = await setup(t, { seconds: '2' });
+    worker.start();
+    await assert.rejects(() => worker.cancel('nope'), { status: 404 });     // nothing running
+
+    const [A] = await queue(store, 1);
+    worker.wake();
+    await until(() => worker.current()?.id === A);
+    await assert.rejects(() => worker.cancel('nope'), { status: 404 });     // something else running
+    await worker.cancel(A);
+    await until(() => worker.current() === null, 3000);
+});
+
+test('pause() stops the plot where it is, resume() lets it continue to done', async (t) => {
+    const { dir, store, worker, jobs, flag } = await setup(t, { seconds: '1.5' });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(() => worker.current()?.id === A);
+    await until(async () => (await logSize(dir, A)) > 0);
+
+    await worker.pause();
+    assert.equal(worker.current().paused, true);
+    assert.equal(flag('pause'), true, 'the kiosk reads paused from the flag');
+    assert.equal((await store.readQueue()).active.paused, true);
+    await sleep(100);                                          // let an in-flight write land
+    const before = await logSize(dir, A);
+    await sleep(300);
+    assert.equal(await logSize(dir, A), before, 'a stopped process writes nothing');
+
+    await worker.resume();
+    assert.equal(worker.current().paused, false);
+    assert.equal(flag('pause'), false);
+    await until(async () => (await logSize(dir, A)) > before, 1000);
+    await until(releasing(store, () => stateOf(jobs, A) === 'done'));
+    assert.equal(jobs()[0].exitCode, 0);
+});
+
+test('pause() with nothing running is a 409; resume() when not paused is harmless', async (t) => {
+    const { store, worker } = await setup(t, { seconds: '1' });
+    worker.start();
+    await assert.rejects(() => worker.pause(), { status: 409 });
+
+    const [A] = await queue(store, 1);
+    worker.wake();
+    await until(() => worker.current()?.id === A);
+    await worker.resume();                                     // not paused: no-op
+    assert.equal(worker.current().paused, false);
+    await until(releasing(store, () => worker.current() === null));
+});
+
+test('cancel while paused still ends the job, and the pause flag is cleared with it', async (t) => {
+    const { store, worker, jobs, flag } = await setup(t, { seconds: '5' });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(() => worker.current()?.id === A);
+
+    await worker.pause();
+    await worker.cancel(A);                                    // a stopped process ignores SIGTERM: continue it first
+    await until(() => stateOf(jobs, A) === 'cancelled', 3000);
+    assert.equal(worker.current(), null);
+    assert.equal(flag('pause'), false, 'no job, so nothing is paused');
+    assert.equal(flag('hold'), true);
+});
+
+test('a plot whose log stops growing for stallMs is killed: failed with reason stalled, hold set', async (t) => {
+    // Writes 3 ticks, then goes silent for the rest of its 5 s.
+    const { store, worker, jobs } = await setup(t, { seconds: '5', stallAfter: 3, stallMs: 400 });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(() => stateOf(jobs, A) === 'failed', 3000);
+    assert.equal(jobs()[0].reason, 'stalled');
+    assert.equal(worker.current(), null);
+    assert.equal((await store.readQueue()).hold, true);
+});
+
+test('a long plot that keeps writing is never killed, however long it runs', async (t) => {
+    // Runs 1.5 s, almost 4x the stall window, but writes every 0.1 s.
+    const { store, worker, jobs } = await setup(t, { seconds: '1.5', stallMs: 400 });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(releasing(store, () => stateOf(jobs, A) === 'done'), 5000);
+    assert.equal(jobs()[0].exitCode, 0);
+});
+
+test('a paused plot is not a stalled plot, however long the pause', async (t) => {
+    const { store, worker, jobs } = await setup(t, { seconds: '0.8', stallMs: 400 });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(() => worker.current()?.id === A);
+
+    await worker.pause();
+    await sleep(1000);                                         // 2.5x the stall window, log not growing
+    assert.equal(stateOf(jobs, A), 'active', 'a paused plot must not be killed as stalled');
+    await worker.resume();
+    await until(releasing(store, () => stateOf(jobs, A) === 'done'), 5000);
+});
+
+test('the stall window restarts on resume, so a plot that resumes and keeps writing survives', async (t) => {
+    const { store, worker, jobs } = await setup(t, { seconds: '1.2', stallMs: 400 });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(() => worker.current()?.id === A);
+    await worker.pause();
+    await sleep(600);
+    await worker.resume();
+    await sleep(250);                                          // inside a fresh window
+    assert.equal(stateOf(jobs, A), 'active');
+    await until(releasing(store, () => stateOf(jobs, A) === 'done'), 5000);
+});
+
+test('no stallMs means no stall watch: a silent plot runs to its end', async (t) => {
+    const { store, worker, jobs } = await setup(t, { seconds: '0.8', stallAfter: 1 });
+    const [A] = await queue(store, 1);
+    worker.start();
+    await until(releasing(store, () => stateOf(jobs, A) === 'done'), 5000);
+});
+
+test('start() clears a stale pause flag from a previous run', async (t) => {
+    const { store, worker, flag } = await setup(t);
+    await store.setFlag('pause');
+    await worker.start();
+    assert.equal(flag('pause'), false);
 });

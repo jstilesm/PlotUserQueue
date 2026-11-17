@@ -32,7 +32,7 @@ function utcStamp() {
         return utc
 }
 
-function error(message, code) {
+export function error(message, code) {
     throw Object.assign(new Error(message), {status: code});
 }
 export async function createStore(dataDir) {
@@ -240,10 +240,10 @@ export async function createStore(dataDir) {
         }
         return result
     }
-    function finishJob(id, { exitCode, reason}) {
-        const state = exitCode === 0 ? 'done' : 'failed'
+    function finishJob(id, { exitCode, reason, state}) {
+        const status = exitCode === 0 ? 'done' : 'failed'
         const now = new Date().toISOString()
-        const finish = db.prepare(`UPDATE jobs SET state = ?, finished = ?, reason = ?, exitCode = ? WHERE id = ? AND state = 'active'`).run(state, now, reason ?? null, exitCode, id)
+        const finish = db.prepare(`UPDATE jobs SET state = ?, finished = ?, reason = ?, exitCode = ? WHERE id = ? AND state = 'active'`).run(state ?? status, now, reason ?? null, exitCode, id)
         if (finish.changes === 0) {
             error('job not found', 404);
         }
