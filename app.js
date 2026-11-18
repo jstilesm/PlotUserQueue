@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { stripTypeScriptTypes } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url));
@@ -11,6 +12,7 @@ const TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.ts': 'text/javascript; charset=utf-8'
 };
 
 export function createApp({ store, worker }) {
@@ -18,7 +20,6 @@ export function createApp({ store, worker }) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.on('finish', () => console.log(req.method, req.url, res.statusCode))
 
-    // no body catch3.)
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -58,6 +59,7 @@ export function createApp({ store, worker }) {
       return sendJson(res, 200, {ok: true})
     }
 
+    // /jobs/<id>/action
     if (req.method === 'POST' && parts.length === 4 && parts[1] === 'jobs') {
       const [, , id, action] = parts;
       if (action === 'move') {
@@ -120,6 +122,9 @@ async function serveStatic(res, pathname) {
     throw err;
   }
   const type = TYPES[path.extname(file)] ?? 'application/octet-stream';
+  if (path.extname(file) === '.ts') {
+    body = stripTypeScriptTypes(body.toString('utf8'))
+  }
   res.writeHead(200, { 'Content-Type': type });
   res.end(body);
 }

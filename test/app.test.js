@@ -84,6 +84,25 @@ test('encoded ../ cannot escape public/', async () => {
   assert.equal(r.status, 403);
 });
 
+test('a .ts file from public/ is served as JavaScript with its types removed', async () => {
+  const r = await fetch(`${base}/hello.ts`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /^text\/javascript/);
+  const body = await r.text();
+  assert.doesNotMatch(body, /: string/, 'type annotations must be gone');
+  assert.match(body, /export const greeting/);
+
+  // The browser must be able to run it: load it as a module and call it.
+  const mod = await import(`data:text/javascript,${encodeURIComponent(body)}`);
+  assert.equal(mod.shout('hi'), 'HI');
+});
+
+test('a missing .ts file is still a JSON 404', async () => {
+  const r = await fetch(`${base}/nope.ts`);
+  assert.equal(r.status, 404);
+  assert.deepEqual(await r.json(), { error: 'not found' });
+});
+
 // ---- Step 4: read route ----
 
 test('GET /queue.json on an empty queue has the kiosk shape', async () => {

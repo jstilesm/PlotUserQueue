@@ -1,0 +1,16 @@
+{
+  // Type checking only, for the kiosk's .ts files in public/. Nothing is
+  // compiled: plotq strips the types when it serves the files, and Node
+  // strips them when the tests import them. Check with: tsc -p .
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "lib": ["es2022", "dom"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["public/**/*.ts"]
+}
