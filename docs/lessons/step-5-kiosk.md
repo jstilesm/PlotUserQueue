@@ -195,3 +195,13 @@ Rules (the tests in `test/kiosk-view.test.js` are the contract):
   `&&` returns an operand, so `active !== null && …` keeps a boolean; first
   and last can be the same row (`moves`). Release semantics clarified:
   held + idle + something pending. Next: K2 (`kiosk.ts` poll and draw).
+- 2026-11-19, K2 pieces 1–2: poll loop (`fetch('/queue.json')`, `res.ok`
+  check, `#error` bar with a friendly message + `console.error`, 1500 ms),
+  `draw` sets the status line, `#active` and `#checklist` visibility with
+  `hidden = !condition`, fills fields via the tutor's `$(selector, root)`
+  helper. Confusions cleared: plotq serves the frontend itself (no separate
+  server); the server had been started on plotpi, so `localhost` in the
+  laptop browser found nothing. Review found the paused badge inverted and the
+  checklist's name/user written into `activeSection`. Tutor confirmed the
+  served `kiosk.ts`/`kiosk-view.ts` are valid JS after stripping. Next: piece 3
+  (lists: `replaceChildren()` before appending, template `cloneNode`).
