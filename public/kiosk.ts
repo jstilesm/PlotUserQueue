@@ -129,16 +129,26 @@ async function send(path :string) {
     }
     
 }
+let lastText: string | undefined;
+let lastQueue: Queue | undefined;
+
 async function poll() {
     const errorBar = $('#error');
     try {
         const res = await fetch('/queue.json')
+        const text = await res.text()
         if (!res.ok) {
             throw new Error(`HTTP Error! Status ${res.status}`)
         }
-        const queue: Queue = await res.json();
-        draw(queue)
+
         errorBar.hidden = true;
+        if (text === lastText) {
+            return
+        }
+        lastText = text
+        const queue: Queue = JSON.parse(text) 
+        lastQueue = queue
+        draw(queue)
     } catch (error) {
         errorBar.textContent = `Can't reach plotq`;
         errorBar.hidden = false;
@@ -164,7 +174,7 @@ document.addEventListener('click', (event) => {
   
 })
 document.addEventListener('change', () => {
-    poll();
+    if (lastQueue) draw(lastQueue)
 })
 
 // poll on load

@@ -223,3 +223,17 @@ Rules (the tests in `test/kiosk-view.test.js` are the contract):
   isn't searched by `document`, so the first row threw). A stray `$('$can')`
   would have thrown a `SyntaxError` whenever the checklist showed — `tsc`
   can't check selector strings. Next: K3 (sending).
+- 2026-11-23, K3: done, 99/99, `tsc -p .` clean. `send(path)` POSTs, reads
+  the server's `{ error }` into `#error` (narrowing with `error instanceof
+  Error`), then polls. One delegated `click` listener on `document`:
+  `closest('button')`, destructured `dataset` (`action`, `move`),
+  `'cancel' in button.dataset`; ids stored as `data-id` on the active section
+  and each row's `<li>`. Release handled outside the loop:
+  `disabled = !(can.release && allTicked)`; ticks cleared when
+  `pending[0]?.id` differs from a module-level `lastNextId`; a `change`
+  listener polls so ticking updates at once. Bugs: `button.id` overwritten
+  with job ids; `.disabled =` clipped from a line; `data.message` vs
+  `{ error }`; relative paths without a leading `/`; `$('active')` missing
+  `#`; `.every(b => b.checked = false)` stopped after the first box (the
+  assignment returns `false`) → `forEach`. Jess cut the checklist to two
+  boxes. Next: live run on plotpi via the kiosk, then K4.

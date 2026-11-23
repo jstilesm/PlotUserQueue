@@ -65,8 +65,20 @@ section { padding: 6px 8px; }
 
 #queue {
   flex: 1;
-  min-height: 0;
+  min-height: 0;                /* lets the column item shrink, so it scrolls instead of clipping */
   overflow-y: auto;
+  touch-action: pan-y;          /* a vertical swipe scrolls the list */
+  overscroll-behavior: contain; /* ...and stops at the ends instead of moving the page */
+}
+
+/* A scrollbar wide enough to drag with a finger on the resistive screen. */
+#queue::-webkit-scrollbar { width: 28px; }
+#queue::-webkit-scrollbar-track { background: var(--panel); }
+#queue::-webkit-scrollbar-thumb {
+  background: #666;
+  border: 5px solid var(--panel);
+  border-radius: 14px;
+  min-height: var(--tap);
 }
 
 h2 {
