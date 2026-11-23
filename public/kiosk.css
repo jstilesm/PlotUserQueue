@@ -65,6 +65,7 @@ section { padding: 6px 8px; }
 
 #queue {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 

@@ -8,10 +8,10 @@
   <script type="module" src="kiosk.ts"></script>
 </head>
 <body>
-  <!-- Status line and the Hold button. Always visible. -->
+  <!-- Status line and the Pause button. Always visible. -->
   <header>
     <span id="status-text">Connecting…</span>
-    <button data-action="hold">Hold</button>
+    <button data-action="hold">Pause</button>
   </header>
 
   <!-- Shown when the server can't be reached or a request fails. -->
@@ -37,10 +37,9 @@
          every box is ticked. -->
     <section id="checklist" hidden>
       <div class="next">Next: <span class="name"></span> <span class="user"></span></div>
-      <label><input type="checkbox" name="check"> Pen loaded</label>
-      <label><input type="checkbox" name="check"> Paper taped down</label>
-      <label><input type="checkbox" name="check"> Origin set</label>
-      <button data-action="release" class="go">Release</button>
+      <label><input type="checkbox" name="check"> Pen/Pens loaded</label>
+      <label><input type="checkbox" name="check"> Paper aligned and loaded</label>
+      <button data-action="release" class="go">Print</button>
     </section>
 
     <section id="queue">

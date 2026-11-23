@@ -5,7 +5,7 @@ interface Job {
     user: string;
 }
 
-interface ActiveJob extends Job {
+export interface ActiveJob extends Job {
     preview: string | null;
     progress: number | null;
     paused: boolean;
@@ -13,7 +13,7 @@ interface ActiveJob extends Job {
 export interface PendingJob extends Job {
     preview: string | null;
 }
-interface RecentJob extends Job {
+export interface RecentJob extends Job {
     state: 'done' | 'failed' | 'cancelled';
     finished: string;
 }

@@ -205,3 +205,21 @@ Rules (the tests in `test/kiosk-view.test.js` are the contract):
   checklist's name/user written into `activeSection`. Tutor confirmed the
   served `kiosk.ts`/`kiosk-view.ts` are valid JS after stripping. Next: piece 3
   (lists: `replaceChildren()` before appending, template `cloneNode`).
+- 2026-11-20, K2 piece 3: pending and recent lists drawn from the templates
+  with `replaceChildren()` first. Bugs: `$('pendingList')`/`$('pending-empty')`
+  /`$('badge')` (missing `#`/`.`, camel-case id, no row root); an exception in
+  `draw` lands in `poll`'s catch and shows "Can't reach plotq"; `length > 0`
+  guards stopped emptied lists from clearing; badge text set to name/user
+  instead of `state`, plus a `.bdage` typo. Tutor CSS fix: `#queue` needed
+  `min-height: 0` (column flex item wouldn't shrink, so it was clipped instead
+  of scrolling). Next: piece 4 (disabled states), then K3.
+- 2026-11-21, K2 piece 4: done, `tsc -p .` clean. Fixed buttons via a loop
+  over `['hold', …] as const` with `[data-action="…"]` attribute selectors and
+  `disabled = !can[name]`; row move buttons set inside `pending.forEach((job, i))`
+  from `moves(pending)[i]`. Concepts: attribute selectors; `as const` so a
+  string can index `Controls`; `Moves[]` is an array, so index by row first
+  (TS7015 caught `possibleMoves['top']`); clone a fresh fragment per row
+  (append empties it); query buttons with `row` as root (the template content
+  isn't searched by `document`, so the first row threw). A stray `$('$can')`
+  would have thrown a `SyntaxError` whenever the checklist showed — `tsc`
+  can't check selector strings. Next: K3 (sending).

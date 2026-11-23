@@ -50,7 +50,6 @@ export function controls(queue: Queue): Controls {
 }
 
 export function moves(pending: PendingJob[]) : Moves[] {
-
     return pending.map((job, i) => {
         const status = {
             id: job.id, 
