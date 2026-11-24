@@ -1,0 +1,164 @@
+/* Kiosk for the 480x320 touchscreen. Big targets, no hover, no scrolling
+   of the page itself: only the queue column scrolls. */
+:root {
+  --bg: #111;
+  --panel: #1d1d1d;
+  --line: #333;
+  --text: #eee;
+  --muted: #999;
+  --go: #2e7d32;
+  --danger: #b3261e;
+  --accent: #f2b705;
+  --tap: 44px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 480px;
+  height: 320px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.25 system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 44px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+#status-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+#error {
+  padding: 4px 8px;
+  background: var(--danger);
+  font-size: 13px;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  height: calc(320px - 44px);
+}
+
+section { padding: 6px 8px; }
+
+#active, #checklist {
+  flex: none;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+#queue {
+  flex: 1;
+  min-height: 0;                /* lets the column item shrink, so it scrolls instead of clipping */
+  overflow-y: auto;
+  touch-action: pan-y;          /* a vertical swipe scrolls the list */
+  overscroll-behavior: contain; /* ...and stops at the ends instead of moving the page */
+}
+
+/* A scrollbar wide enough to drag with a finger on the resistive screen. */
+#queue::-webkit-scrollbar { width: 28px; }
+#queue::-webkit-scrollbar-track { background: var(--panel); }
+#queue::-webkit-scrollbar-thumb {
+  background: #666;
+  border: 5px solid var(--panel);
+  border-radius: 14px;
+  min-height: var(--tap);
+}
+
+h2 {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+ol { margin: 0; padding: 0; list-style: none; }
+
+li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: var(--tap);
+  border-bottom: 1px solid var(--line);
+}
+
+.job {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.name { font-weight: 600; }
+.user { color: var(--muted); }
+.user::before { content: "· "; }
+
+.buttons { display: flex; gap: 4px; flex: none; }
+#active .buttons { margin-top: 6px; }
+#active .buttons button { flex: 1; }
+
+button {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #2a2a2a;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+
+button:active:not(:disabled) { background: #3a3a3a; }
+button:disabled { opacity: 0.35; }
+button.go { background: var(--go); border-color: var(--go); }
+button.danger { background: var(--danger); border-color: var(--danger); }
+
+/* A request in flight: kiosk.js sets data-busy on the button it sent. */
+button[data-busy] { opacity: 0.6; }
+
+#checklist label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+#checklist input { width: 22px; height: 22px; }
+#checklist .next { margin-bottom: 2px; }
+#checklist button { width: 100%; margin-top: 4px; }
+
+.badge {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--line);
+}
+
+.badge.paused { background: var(--accent); color: #000; }
+.badge.done { background: var(--go); }
+.badge.failed { background: var(--danger); }
+.badge.cancelled { background: #555; }
+
+.empty { margin: 4px 0; color: var(--muted); }

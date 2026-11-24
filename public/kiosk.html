@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=480, height=320, initial-scale=1">
+  <title>plotq</title>
+  <link rel="stylesheet" href="kiosk.css">
+  <script type="module" src="kiosk.ts"></script>
+</head>
+<body>
+  <!-- Status line and the Hold button. Always visible. -->
+  <header>
+    <span id="status-text">Connecting…</span>
+    <button data-action="hold">Hold</button>
+  </header>
+
+  <!-- Shown when the server can't be reached or a request fails. -->
+  <div id="error" hidden></div>
+
+  <main>
+    <!-- The running plot. Hidden when nothing is active. -->
+    <section id="active" hidden>
+      <div class="job">
+        <span class="name"></span>
+        <span class="user"></span>
+        <span class="badge paused" hidden>paused</span>
+      </div>
+      <div class="buttons">
+        <button data-action="pause">Pause</button>
+        <button data-action="resume">Resume</button>
+        <button data-action="cancel" class="danger">Cancel</button>
+      </div>
+    </section>
+
+    <!-- The checklist before the next plot. Shown when held, nothing is
+         plotting, and something is waiting. Release is enabled only when
+         every box is ticked. -->
+    <section id="checklist" hidden>
+      <div class="next">Next: <span class="name"></span> <span class="user"></span></div>
+      <label><input type="checkbox" name="check"> Pen/Pens loaded</label>
+      <label><input type="checkbox" name="check"> Paper aligned and loaded</label>
+      <button data-action="release" class="go">Print</button>
+    </section>
+
+    <section id="queue">
+      <h2>Up next</h2>
+      <ol id="pending-list"></ol>
+      <p class="empty" id="pending-empty">Nothing waiting.</p>
+
+      <h2>Recent</h2>
+      <ol id="recent-list"></ol>
+    </section>
+  </main>
+
+  <!-- One pending job. kiosk.js clones this per job and fills it in.
+       The buttons carry their move direction in data-move. -->
+  <template id="pending-item">
+    <li>
+      <span class="job"><span class="name"></span> <span class="user"></span></span>
+      <span class="buttons">
+        <button data-move="top" title="Move to top">⤒</button>
+        <button data-move="up" title="Move up">↑</button>
+        <button data-move="down" title="Move down">↓</button>
+        <button data-cancel class="danger" title="Remove">✕</button>
+      </span>
+    </li>
+  </template>
+
+  <!-- One finished job. The state ("done", "failed", "cancelled") goes in
+       the badge text and as a class, which colours it. -->
+  <template id="recent-item">
+    <li>
+      <span class="job"><span class="name"></span> <span class="user"></span></span>
+      <span class="badge state"></span>
+    </li>
+  </template>
+</body>
+</html>
